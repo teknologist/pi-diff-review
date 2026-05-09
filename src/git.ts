@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { extname, join } from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { ChangeStatus, ReviewFile, ReviewFileComparison, ReviewFileContents, ReviewScope } from "./types.js";
@@ -18,6 +19,17 @@ interface ReviewFileSeed {
   gitDiff: ReviewFileComparison | null;
   lastCommit: ReviewFileComparison | null;
 }
+
+const DEFAULT_IGNORED_FILES = [
+  "bun.lockb",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "poetry.lock",
+  "uv.lock",
+  "yarn.lock",
+];
+
+const SETTINGS_KEY = "pi-diff-review";
 
 async function runGit(pi: ExtensionAPI, repoRoot: string, args: string[]): Promise<string> {
   const result = await pi.exec("git", args, { cwd: repoRoot });
@@ -191,12 +203,51 @@ async function getWorkingTreeContent(repoRoot: string, path: string): Promise<st
   }
 }
 
-function isReviewableFilePath(path: string): boolean {
-  const lowerPath = path.toLowerCase();
+function normalizeReviewPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+}
+
+function collectIgnoredFiles(settings: unknown): string[] {
+  if (settings == null || typeof settings !== "object") return [];
+  const root = settings as Record<string, unknown>;
+  const section = root[SETTINGS_KEY];
+  if (section == null || typeof section !== "object") return [];
+  const ignoredFiles = (section as Record<string, unknown>).ignoredFiles;
+  if (!Array.isArray(ignoredFiles)) return [];
+  return ignoredFiles.filter((path): path is string => typeof path === "string" && path.trim().length > 0);
+}
+
+async function readIgnoredFilesSettings(path: string): Promise<string[]> {
+  try {
+    const raw = await readFile(path, "utf8");
+    return collectIgnoredFiles(JSON.parse(raw));
+  } catch {
+    return [];
+  }
+}
+
+async function loadIgnoredFiles(repoRoot: string): Promise<Set<string>> {
+  const configuredIgnoredFiles = [
+    ...await readIgnoredFilesSettings(join(homedir(), ".pi", "agent", "settings.json")),
+    ...await readIgnoredFilesSettings(join(repoRoot, ".pi", "settings.json")),
+  ];
+
+  return new Set([...DEFAULT_IGNORED_FILES, ...configuredIgnoredFiles].map(normalizeReviewPath));
+}
+
+function isIgnoredReviewPath(path: string, ignoredFiles: Set<string>): boolean {
+  const normalizedPath = normalizeReviewPath(path);
+  const fileName = normalizedPath.split("/").pop() ?? normalizedPath;
+  return ignoredFiles.has(normalizedPath) || ignoredFiles.has(fileName);
+}
+
+function isReviewableFilePath(path: string, ignoredFiles: Set<string>): boolean {
+  const lowerPath = normalizeReviewPath(path);
   const fileName = lowerPath.split("/").pop() ?? lowerPath;
   const extension = extname(fileName);
 
   if (fileName.length === 0) return false;
+  if (isIgnoredReviewPath(path, ignoredFiles)) return false;
 
   const binaryExtensions = new Set([
     ".7z",
@@ -270,14 +321,15 @@ export async function getReviewWindowData(pi: ExtensionAPI, cwd: string): Promis
     ? await runGitAllowFailure(pi, repoRoot, ["diff-tree", "--root", "--find-renames", "-M", "--name-status", "--no-commit-id", "-r", "HEAD"])
     : "";
 
+  const ignoredFiles = await loadIgnoredFiles(repoRoot);
   const worktreeChanges = mergeChangedPaths(parseNameStatus(trackedDiffOutput), parseUntrackedPaths(untrackedOutput))
-    .filter((change) => isReviewableFilePath(change.newPath ?? change.oldPath ?? ""));
+    .filter((change) => isReviewableFilePath(change.newPath ?? change.oldPath ?? "", ignoredFiles));
   const deletedPaths = new Set(parseTrackedPaths(deletedFilesOutput));
   const currentPaths = uniquePaths([...parseTrackedPaths(trackedFilesOutput), ...parseTrackedPaths(untrackedOutput)])
     .filter((path) => !deletedPaths.has(path))
-    .filter(isReviewableFilePath);
+    .filter((path) => isReviewableFilePath(path, ignoredFiles));
   const lastCommitChanges = parseNameStatus(lastCommitOutput)
-    .filter((change) => isReviewableFilePath(change.newPath ?? change.oldPath ?? ""));
+    .filter((change) => isReviewableFilePath(change.newPath ?? change.oldPath ?? "", ignoredFiles));
 
   const seeds = new Map<string, ReviewFileSeed>();
 

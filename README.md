@@ -24,6 +24,32 @@ The command:
 6. lets you draft comments on the original side, modified side, or whole file
 7. inserts the resulting feedback prompt into the pi editor when you submit
 
+## Ignored files
+
+Diff Review ignores common lockfiles by default so large generated dependency diffs do not fill the context window:
+
+- `bun.lockb`
+- `package-lock.json`
+- `pnpm-lock.yaml`
+- `poetry.lock`
+- `uv.lock`
+- `yarn.lock`
+
+Extend the list globally in `~/.pi/agent/settings.json` or per project in `.pi/settings.json`:
+
+```json
+{
+  "pi-diff-review": {
+    "ignoredFiles": [
+      "vendor/generated.json",
+      "large-fixture.csv"
+    ]
+  }
+}
+```
+
+Entries are case-insensitive. Use either a basename (`uv.lock`) or a repository-relative path (`fixtures/huge.json`). Project settings extend global settings; they do not replace the built-in ignores.
+
 ## Requirements
 
 - macOS, Linux, or Windows
