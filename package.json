@@ -4,8 +4,7 @@
   "version": "0.2.0",
   "type": "module",
   "scripts": {
-    "check": "tsgo --noEmit",
-    "prepare": "husky"
+    "check": "tsgo --noEmit"
   },
   "pi": {
     "extensions": [
@@ -21,7 +20,6 @@
   "devDependencies": {
     "@types/node": "^24.5.2",
     "@typescript/native-preview": "^7.0.0-dev.20260313.1",
-    "husky": "^9.1.7",
     "typescript": "^5.9.2"
   }
 }
